@@ -13,6 +13,15 @@ var Break = new(int)
 // Can be used to avoid unnecessary documentation + casting when all errors in a group are *T.
 type G []*T
 
+// Add expands the G, discaring nil values.
+func (x *G) Add(errs ...*T) {
+	for _, err := range errs {
+		if err != nil {
+			*x = append(*x, err)
+		}
+	}
+}
+
 func (x G) Error() string {
 	var p stringPrinter
 	Traverse(&p, x)
@@ -20,12 +29,15 @@ func (x G) Error() string {
 	return string(p.bytes)
 }
 
-func (x G) Wrap() error {
-	if len(x) == 0 {
+func (x G) Resolve() error {
+	switch len(x) {
+	case 0:
 		return nil
+	case 1:
+		return x[0]
+	default:
+		return x
 	}
-
-	return x
 }
 
 // A Group can be used to pass multiple independent errors as a single error value.
@@ -47,14 +59,17 @@ func (x Group) Error() string {
 	return string(p.bytes)
 }
 
-// Wrap returns the Group value, or nil if it is empty.
+// Resolve returns the Group value, the sole error if it has a single element, or nil if it is empty.
 // Can be used to conveniently return a potential group of errors.
-func (x Group) Wrap() error {
-	if len(x) == 0 {
+func (x Group) Resolve() error {
+	switch len(x) {
+	case 0:
 		return nil
+	case 1:
+		return x[0]
+	default:
+		return x
 	}
-
-	return x
 }
 
 // A Line represents a line of code.
@@ -92,7 +107,7 @@ type T struct {
 	Message string
 
 	// extra information, such as local variables
-	Info []any
+	Info any
 
 	// helps caller make a decision at runtime
 	Mark any
@@ -107,22 +122,11 @@ type T struct {
 	Lead []*T
 }
 
-func Mark(mark any, err error) *T {
-	return &T{
-		Mark: mark,
-		Sub:  err,
-	}
-}
-
-// MarkBreak is a [Mark] variant that uses the unique Break value.
+// MarkBreak returns an error marked with the unique Break value.
 func MarkBreak(err error) *T {
-	return Mark(Break, err)
-}
-
-func Message(msg string, err error) *T {
 	return &T{
-		Message: msg,
-		Sub:     err,
+		Mark: Break,
+		Sub:  err,
 	}
 }
 
@@ -155,10 +159,6 @@ func (x *T) Error() string {
 	return string(p.bytes)
 }
 
-func (x *T) InfoAdd(v ...any) {
-	x.Info = append(x.Info, v...)
-}
-
 // Link adds the given error as a Tail.
 // If the error is of type *T, then this value is added to its Leads.
 //
@@ -173,6 +173,24 @@ func (x *T) Link(err error) {
 	if t, ok := err.(*T); ok {
 		t.Lead = append(t.Lead, x)
 	}
+}
+
+func (x *T) Unwrap() error {
+	return x.Sub
+}
+
+func (x *T) Wrap() error {
+	if x == nil {
+		return nil
+	}
+	return x
+}
+
+// A Wrapper adds an additional information layer on top of another error.
+//
+// NOTE This specific interface method was chosen for some degree of compatibility with the standard "errors" package.
+type Wrapper interface {
+	Unwrap() error
 }
 
 type stringPrinter struct {
@@ -200,7 +218,7 @@ func (x *stringPrinter) Print(err *T) {
 		x.newline()
 	}
 
-	if len(err.Info) > 0 {
+	if err.Info != nil {
 		x.indent()
 		x.string("Info: ")
 		x.any(err.Info)
@@ -250,6 +268,23 @@ func (x *stringPrinter) newline() {
 
 func (x *stringPrinter) string(s string) {
 	x.bytes = append(x.bytes, s...)
+}
+
+// Check returns true if err or any suberror in its wrapped chain (as per the [Wrapper] interface) is a *T with the given mark.
+//
+// This function is specifically targeted at linear error chains, as reasoning about branching trees is rather impossible in a general way.
+func Check(err error, mark any) bool {
+	switch e := err.(type) {
+	case *T:
+		if e.Mark == mark {
+			return true
+		}
+		return Check(e.Sub, mark)
+	case Wrapper:
+		return Check(e.Unwrap(), mark)
+	default:
+		return false
+	}
 }
 
 // Simple returns a basic text error.
