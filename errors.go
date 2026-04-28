@@ -175,15 +175,15 @@ func (x *T) Link(err error) {
 	}
 }
 
-func (x *T) Unwrap() error {
-	return x.Sub
-}
-
-func (x *T) Wrap() error {
+func (x *T) Resolve() error {
 	if x == nil {
 		return nil
 	}
 	return x
+}
+
+func (x *T) Unwrap() error {
+	return x.Sub
 }
 
 // A Wrapper adds an additional information layer on top of another error.
